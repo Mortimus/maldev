@@ -42,3 +42,14 @@ func Print(title string, baseAddress uint64, shellcode []byte) {
 		fmt.Printf(" |\n")
 	}
 }
+
+func PrintSourcecode(variable string, shellcode []byte) {
+	fmt.Printf("var %s = []byte{\n\t", variable)
+	for i, b := range shellcode {
+		fmt.Printf("0x%02X, ", b)
+		if (i+1)%16 == 0 {
+			fmt.Printf("\n\t")
+		}
+	}
+	fmt.Printf("\n}\n")
+}
