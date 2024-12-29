@@ -3,8 +3,8 @@ package maldev
 import "testing"
 
 func TestRC4(t *testing.T) {
-	secretData := []byte(randomString(64))
-	key := []byte(randomString(3))
+	secretData := []byte(RandomString(64))
+	key := []byte(RandomString(3))
 	rc4 := Rc4Context{}
 	rc4.Init(key)
 	encryptedData := rc4.Cipher(secretData)

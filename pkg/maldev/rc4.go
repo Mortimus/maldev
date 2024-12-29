@@ -1,5 +1,11 @@
 package maldev
 
+import (
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
 type Rc4Context struct {
 	i, j int
 	s    [256]byte
@@ -39,4 +45,38 @@ func (rc4 *Rc4Context) Cipher(data []byte) []byte {
 	}
 	// Return the encrypted data
 	return encrypted
+}
+
+type NTSTATUS uint32
+
+type USTRING struct {
+	Length        uint32
+	MaximumLength uint32
+	Buffer        unsafe.Pointer
+}
+
+func SystemFunction032(secret, key []byte) ([]byte, NTSTATUS) {
+	// get SystemFunction032 address from ADVAPI32.dll
+	advapi32 := windows.NewLazyDLL("ADVAPI32.dll")
+	systemFunction032 := advapi32.NewProc("SystemFunction032")
+	data := &USTRING{
+		Length:        uint32(len(secret)),
+		MaximumLength: uint32(len(secret)),
+		Buffer:        unsafe.Pointer(&secret[0]),
+	}
+	code := &USTRING{
+		Length:        uint32(len(key)),
+		MaximumLength: uint32(len(key)),
+		Buffer:        unsafe.Pointer(&key[0]),
+	}
+
+	// call SystemFunction032
+	ret, _, _ := systemFunction032.Call(uintptr(unsafe.Pointer(data)), uintptr(unsafe.Pointer(code)))
+	// get data.buffer as a byte array
+	secretData := make([]byte, len(secret))
+	for i := 0; i < len(secret); i++ {
+		secretData[i] = *(*byte)(unsafe.Pointer(uintptr(data.Buffer) + uintptr(i)))
+	}
+	// return the encrypted data and the status code
+	return secretData, NTSTATUS(ret)
 }
