@@ -107,3 +107,26 @@ func ConvertMACToBytes(macs []string) []byte {
 	}
 	return data
 }
+
+func ConvertToUUID(data []byte) ([]string, error) {
+	// There are 5 segments in a UUID
+	// First 3 segments are little endian
+	// Last 2 segments are big endian
+	// check if data length is a multiple of 16
+	if len(data)%16 != 0 {
+		return nil, fmt.Errorf("data length is not a multiple of 16")
+	}
+	// loop through data and convert each 16 bytes to a UUID
+	uuids := make([]string, 0)
+	for len(data) > 0 {
+		// convert 16 bytes to a UUID
+		// First 3 segments are little endian
+		// Last 2 segments are big endian
+		uuid := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", data[0], data[1], data[2], data[3], data[4])
+		// append to slice
+		uuids = append(uuids, uuid)
+		// move to next 16 bytes
+		data = data[16:]
+	}
+	return uuids, nil
+}
