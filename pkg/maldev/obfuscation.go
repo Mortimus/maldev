@@ -122,11 +122,30 @@ func ConvertToUUID(data []byte) ([]string, error) {
 		// convert 16 bytes to a UUID
 		// First 3 segments are little endian
 		// Last 2 segments are big endian
-		uuid := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", data[0], data[1], data[2], data[3], data[4])
+		// ########-####-####-####-############
+		segment1 := fmt.Sprintf("%02x%02x%02x%02x", data[3], data[2], data[1], data[0])
+		segment2 := fmt.Sprintf("%02x%02x", data[5], data[4])
+		segment3 := fmt.Sprintf("%02x%02x", data[7], data[6])
+		segment4 := fmt.Sprintf("%02x%02x", data[8], data[9])
+		segment5 := fmt.Sprintf("%02x%02x%02x%02x%02x%02x", data[10], data[11], data[12], data[13], data[14], data[15])
+		uuid := fmt.Sprintf("%s-%s-%s-%s-%s", segment1, segment2, segment3, segment4, segment5)
 		// append to slice
 		uuids = append(uuids, uuid)
 		// move to next 16 bytes
 		data = data[16:]
 	}
 	return uuids, nil
+}
+
+func ConvertUUIDToBytes(uuids []string) []byte {
+	// loop through uuids and convert each UUID to 16 bytes
+	data := make([]byte, 0)
+	for _, uuid := range uuids {
+		// convert UUID to 16 bytes
+		var a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p int
+		fmt.Sscanf(uuid, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", &d, &c, &b, &a, &f, &e, &h, &g, &i, &j, &k, &l, &m, &n, &o, &p)
+		// append to slice
+		data = append(data, byte(a), byte(b), byte(c), byte(d), byte(e), byte(f), byte(g), byte(h), byte(i), byte(j), byte(k), byte(l), byte(m), byte(n), byte(o), byte(p))
+	}
+	return data
 }

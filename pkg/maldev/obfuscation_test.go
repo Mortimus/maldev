@@ -40,3 +40,15 @@ func TestConvertMAC(t *testing.T) {
 		t.Errorf("ConvertMACAddress failed")
 	}
 }
+
+func TestConvertUUID(t *testing.T) {
+	data := []byte(RandomString(192))
+	uuids, err := ConvertToUUID(data)
+	if err != nil {
+		t.Errorf("ConvertToUUID failed: %s", err)
+	}
+	data2 := ConvertUUIDToBytes(uuids)
+	if !bytes.Equal(data, data2) {
+		t.Errorf("ConvertUUID failed")
+	}
+}
