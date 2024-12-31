@@ -1,6 +1,9 @@
 package maldev
 
-import "math/rand"
+import (
+	"fmt"
+	"math/rand"
+)
 
 func RandomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -9,4 +12,19 @@ func RandomString(n int) string {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
+}
+
+// This function makes sure the data is a specific multiple to ensure proper length's for obfuscation
+func ShellCodePadding(data []byte, multiple int) ([]byte, error) {
+	if len(data)%multiple != 0 {
+		for i := 0; i < len(data)%multiple; i++ {
+			// append NOPS
+			data = append(data, 0x90)
+		}
+	}
+	// double check that the data is a multiple of multiple
+	if len(data)%multiple != 0 {
+		return nil, fmt.Errorf("failed to make data multiple of %d", multiple)
+	}
+	return data, nil
 }
