@@ -17,6 +17,7 @@ const (
 	MEM_RESERVE            = 0x2000
 	PAGE_EXECUTE_READWRITE = 0x40
 	PAGE_READWRITE         = 0x04
+	MEM_RELEASE            = 0x8000
 )
 
 /*
@@ -82,4 +83,24 @@ func CreateThread(lpThreadAttributes LPSECURITY_ATTRIBUTES, dwStackSize SIZE_T, 
 		return 1, err
 	}
 	return HANDLE(handle), nil
+}
+
+/*
+BOOL VirtualFree(
+
+	[in] LPVOID lpAddress,
+	[in] SIZE_T dwSize,
+	[in] DWORD  dwFreeType
+
+);
+*/
+func VirtualFree(lpAddress LPVOID, dwSize SIZE_T, dwFreeType DWORD) (bool, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	virtualFree := kernel32.MustFindProc("VirtualFree")
+	result, _, ntStatus := virtualFree.Call(uintptr(lpAddress), uintptr(dwSize), uintptr(dwFreeType))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return false, err
+	}
+	return result != 0, nil
 }
