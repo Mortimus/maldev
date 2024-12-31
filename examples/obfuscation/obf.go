@@ -9,9 +9,13 @@ import (
 )
 
 func main() {
-	sc := []byte(maldev.RandomString(4))
+	sc := []byte(maldev.RandomString(18))
 	shellcode.Print("Shellcode", 0, sc)
-	fmt.Printf("Converting to IPv4\n")
+	fmt.Printf("Converting to IPv4 and padding\n")
+	sc, err := maldev.ShellCodePadding(sc, 4)
+	if err != nil {
+		log.Fatalf("Error: %s\n", err)
+	}
 	ip4, err := maldev.ConvertToIPv4(sc)
 	if err != nil {
 		log.Fatalf("Error: %s\n", err)

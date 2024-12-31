@@ -5,6 +5,8 @@ import (
 	"math/rand"
 )
 
+const NOP = 0x90
+
 func RandomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, n)
@@ -19,7 +21,7 @@ func ShellCodePadding(data []byte, multiple int) ([]byte, error) {
 	if len(data)%multiple != 0 {
 		for i := 0; i < len(data)%multiple; i++ {
 			// append NOPS
-			data = append(data, 0x90)
+			data = append(data, NOP)
 		}
 	}
 	// double check that the data is a multiple of multiple
