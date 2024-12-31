@@ -47,7 +47,7 @@ type USTRING struct {
 	Buffer        unsafe.Pointer
 }
 
-func SystemFunction032(secret, key []byte) ([]byte, NTSTATUS) {
+func SystemFunction032(secret, key []byte) ([]byte, error) {
 	// get SystemFunction032 address from ADVAPI32.dll
 	advapi32 := windows.NewLazyDLL("ADVAPI32.dll")
 	systemFunction032 := advapi32.NewProc("SystemFunction032")
@@ -70,10 +70,10 @@ func SystemFunction032(secret, key []byte) ([]byte, NTSTATUS) {
 		secretData[i] = *(*byte)(unsafe.Pointer(uintptr(data.Buffer) + uintptr(i)))
 	}
 	// return the encrypted data and the status code
-	return secretData, NTSTATUS(ret)
+	return secretData, NTStatusToError(NTSTATUS(ret))
 }
 
-func SystemFunction033(secret, key []byte) ([]byte, NTSTATUS) {
+func SystemFunction033(secret, key []byte) ([]byte, error) {
 	// get SystemFunction033 address from ADVAPI32.dll
 	advapi32 := windows.NewLazyDLL("ADVAPI32.dll")
 	systemFunction033 := advapi32.NewProc("SystemFunction033")
@@ -96,5 +96,5 @@ func SystemFunction033(secret, key []byte) ([]byte, NTSTATUS) {
 		secretData[i] = *(*byte)(unsafe.Pointer(uintptr(data.Buffer) + uintptr(i)))
 	}
 	// return the encrypted data and the status code
-	return secretData, NTSTATUS(ret)
+	return secretData, NTStatusToError(NTSTATUS(ret))
 }
