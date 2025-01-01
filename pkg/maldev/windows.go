@@ -1,6 +1,8 @@
 package maldev
 
 import (
+	"errors"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -11,6 +13,8 @@ type SIZE_T uintptr
 type HANDLE uintptr
 type LPSECURITY_ATTRIBUTES uintptr
 type LPTHREAD_START_ROUTINE uintptr
+type FARPROC uintptr
+type LPWSTR []uint16
 
 const (
 	MEM_COMMIT             = 0x1000
@@ -40,18 +44,19 @@ type CHAR byte
 type LONG int32
 
 const MAX_PATH = 260
+const NULL = 0
 
 type PROCESSENTRY32 struct {
-	dwSize              DWORD
-	cntUsage            DWORD
-	th32ProcessID       DWORD
-	th32DefaultHeapID   ULONG_PTR
-	th32ModuleID        DWORD
-	cntThreads          DWORD
-	th32ParentProcessID DWORD
-	pcPriClassBase      LONG
-	dwFlags             DWORD
-	szExeFile           [MAX_PATH]CHAR
+	DwSize              DWORD
+	CntUsage            DWORD
+	Th32ProcessID       DWORD
+	Th32DefaultHeapID   ULONG_PTR
+	Th32ModuleID        DWORD
+	CntThreads          DWORD
+	Th32ParentProcessID DWORD
+	PcPriClassBase      LONG
+	DwFlags             DWORD
+	SzExeFile           [MAX_PATH]CHAR
 }
 
 /*
@@ -70,7 +75,29 @@ func VirtualAlloc(lpAddress LPVOID, dwSize SIZE_T, flAllocationType DWORD, flPro
 	addr, _, ntStatus := virtualAlloc.Call(uintptr(lpAddress), uintptr(dwSize), uintptr(flAllocationType), uintptr(flProtect))
 	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
 	if err != nil {
-		return 1, err
+		return NULL, err
+	}
+	return LPVOID(addr), nil
+}
+
+/*
+LPVOID VirtualAllocEx(
+
+	[in]           HANDLE hProcess,
+	[in, optional] LPVOID lpAddress,
+	[in]           SIZE_T dwSize,
+	[in]           DWORD  flAllocationType,
+	[in]           DWORD  flProtect
+
+);
+*/
+func VirtualAllocEx(hProcess HANDLE, lpAddress LPVOID, dwSize SIZE_T, flAllocationType DWORD, flProtect DWORD) (LPVOID, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	virtualAllocEx := kernel32.MustFindProc("VirtualAllocEx")
+	addr, _, ntStatus := virtualAllocEx.Call(uintptr(hProcess), uintptr(lpAddress), uintptr(dwSize), uintptr(flAllocationType), uintptr(flProtect))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return NULL, err
 	}
 	return LPVOID(addr), nil
 }
@@ -114,7 +141,7 @@ func CreateThread(lpThreadAttributes LPSECURITY_ATTRIBUTES, dwStackSize SIZE_T, 
 	handle, _, ntStatus := createThread.Call(uintptr(lpThreadAttributes), uintptr(dwStackSize), uintptr(lpStartAddress), uintptr(lpParameter), uintptr(dwCreationFlags), uintptr(unsafe.Pointer(lpThreadId)))
 	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
 	if err != nil {
-		return 1, err
+		return NULL, err
 	}
 	return HANDLE(handle), nil
 }
@@ -153,7 +180,7 @@ func CreateToolhelp32Snapshot(dwFlags DWORD, th32ProcessID DWORD) (HANDLE, error
 	handle, _, ntStatus := createToolhelp32Snapshot.Call(uintptr(dwFlags), uintptr(th32ProcessID))
 	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
 	if err != nil {
-		return 1, err
+		return NULL, err
 	}
 	return HANDLE(handle), nil
 }
@@ -167,3 +194,277 @@ const (
 	TH32CS_SNAPPROCESS  = 0x00000002                                        // Includes all processes in the system in the snapshot. To enumerate the processes, see Process32First.
 	TH32CS_SNAPTHREAD   = 0x00000004                                        // Includes all threads in the system in the snapshot. To enumerate the threads, see Thread32First. To identify the threads that belong to a specific process, compare its process identifier to the th32OwnerProcessID member of the THREADENTRY32 structure when enumerating the threads.
 )
+
+/*
+BOOL Process32First(
+
+	[in]      HANDLE           hSnapshot,
+	[in, out] LPPROCESSENTRY32 lppe
+
+);
+*/
+func Process32First(hSnapshot HANDLE, lppe *PROCESSENTRY32) (bool, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	process32First := kernel32.MustFindProc("Process32First")
+	result, _, ntStatus := process32First.Call(uintptr(hSnapshot), uintptr(unsafe.Pointer(lppe)))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return false, err
+	}
+	return result != 0, nil
+}
+
+/*
+BOOL Process32Next(
+
+	[in]  HANDLE           hSnapshot,
+	[out] LPPROCESSENTRY32 lppe
+
+);
+*/
+func Process32Next(hSnapshot HANDLE, lppe *PROCESSENTRY32) (bool, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	process32Next := kernel32.MustFindProc("Process32Next")
+	result, _, ntStatus := process32Next.Call(uintptr(hSnapshot), uintptr(unsafe.Pointer(lppe)))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return false, err
+	}
+	return result != 0, nil
+}
+
+/*
+BOOL CloseHandle(
+
+	[in] HANDLE hObject
+
+);
+*/
+func CloseHandle(hObject HANDLE) error {
+	if hObject == NULL {
+		return nil
+	}
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	closeHandle := kernel32.MustFindProc("CloseHandle")
+	_, _, ntStatus := closeHandle.Call(uintptr(hObject))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func CharSliceToString(charSlice []CHAR) string {
+	var str string
+	for _, c := range charSlice {
+		if c == 0 {
+			break
+		}
+		str += string(c)
+	}
+	return str
+}
+
+func boolToUintptr(b bool) uintptr {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+/*
+HANDLE OpenProcess(
+
+	[in] DWORD dwDesiredAccess,
+	[in] BOOL  bInheritHandle,
+	[in] DWORD dwProcessId
+
+);
+*/
+func OpenProcess(dwDesiredAccess DWORD, bInheritHandle bool, dwProcessId DWORD) (HANDLE, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	openProcess := kernel32.MustFindProc("OpenProcess")
+	handle, _, ntStatus := openProcess.Call(uintptr(dwDesiredAccess), boolToUintptr(bInheritHandle), uintptr(dwProcessId))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return NULL, err
+	}
+	return HANDLE(handle), nil
+}
+
+const (
+	PROCESS_ALL_ACCESS                = 0x001F0FFF // All possible access rights for a process object.Windows Server 2003 and Windows XP: The size of the PROCESS_ALL_ACCESS flag increased on Windows Server 2008 and Windows Vista. If an application compiled for Windows Server 2008 and Windows Vista is run on Windows Server 2003 or Windows XP, the PROCESS_ALL_ACCESS flag is too large and the function specifying this flag fails with ERROR_ACCESS_DENIED. To avoid this problem, specify the minimum set of access rights required for the operation. If PROCESS_ALL_ACCESS must be used, set _WIN32_WINNT to the minimum operating system targeted by your application (for example, #define _WIN32_WINNT _WIN32_WINNT_WINXP). For more information, see Using the Windows Headers.
+	PROCESS_CREATE_PROCESS            = 0x0080     // Required to use this process as the parent process with PROC_THREAD_ATTRIBUTE_PARENT_PROCESS.
+	PROCESS_CREATE_THREAD             = 0x0002     // Required to create a thread in the process.
+	PROCESS_DUP_HANDLE                = 0x0040     // Required to duplicate a handle using DuplicateHandle.
+	PROCESS_QUERY_INFORMATION         = 0x0400     // Required to retrieve certain information about a process, such as its token, exit code, and priority class (see OpenProcessToken).
+	PROCESS_QUERY_LIMITED_INFORMATION = 0x1000     // Required to retrieve certain information about a process (see GetExitCodeProcess, GetPriorityClass, IsProcessInJob, QueryFullProcessImageName). A handle that has the PROCESS_QUERY_INFORMATION access right is automatically granted PROCESS_QUERY_LIMITED_INFORMATION.Windows Server 2003 and Windows XP: This access right is not supported.
+	PROCESS_SET_INFORMATION           = 0x0200     // Required to set certain information about a process, such as its priority class (see SetPriorityClass).
+	PROCESS_SET_QUOTA                 = 0x0100     // Required to set memory limits using SetProcessWorkingSetSize.
+	PROCESS_SUSPEND_RESUME            = 0x0800     // Required to suspend or resume a process.
+	PROCESS_TERMINATE                 = 0x0001     // Required to terminate a process using TerminateProcess.
+	PROCESS_VM_OPERATION              = 0x0008     // Required to perform an operation on the address space of a process (see VirtualProtectEx and WriteProcessMemory).
+	PROCESS_VM_READ                   = 0x0010     // Required to read memory in a process using ReadProcessMemory.
+	PROCESS_VM_WRITE                  = 0x0020     // Required to write to memory in a process using WriteProcessMemory.
+	SYNCHRONIZE                       = 0x00100000 // Required to wait for the process to terminate using the wait functions.
+)
+
+type LPCVOID uintptr
+
+/*
+BOOL WriteProcessMemory(
+
+	[in]  HANDLE  hProcess,
+	[in]  LPVOID  lpBaseAddress,
+	[in]  LPCVOID lpBuffer,
+	[in]  SIZE_T  nSize,
+	[out] SIZE_T  *lpNumberOfBytesWritten
+
+);
+*/
+func WriteProcessMemory(hProcess HANDLE, lpBaseAddress LPVOID, lpBuffer LPCVOID, nSize SIZE_T, lpNumberOfBytesWritten *SIZE_T) error {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	writeProcessMemory := kernel32.MustFindProc("WriteProcessMemory")
+	_, _, ntStatus := writeProcessMemory.Call(uintptr(hProcess), uintptr(lpBaseAddress), uintptr(lpBuffer), uintptr(nSize), uintptr(unsafe.Pointer(lpNumberOfBytesWritten)))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+/*
+HANDLE CreateRemoteThread(
+
+	[in]  HANDLE                 hProcess,
+	[in]  LPSECURITY_ATTRIBUTES  lpThreadAttributes,
+	[in]  SIZE_T                 dwStackSize,
+	[in]  LPTHREAD_START_ROUTINE lpStartAddress,
+	[in]  LPVOID                 lpParameter,
+	[in]  DWORD                  dwCreationFlags,
+	[out] LPDWORD                lpThreadId
+
+);
+*/
+func CreateRemoteThread(hProcess HANDLE, lpThreadAttributes LPSECURITY_ATTRIBUTES, dwStackSize SIZE_T, lpStartAddress LPTHREAD_START_ROUTINE, lpParameter LPVOID, dwCreationFlags DWORD, lpThreadId *DWORD) (HANDLE, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	createRemoteThread := kernel32.MustFindProc("CreateRemoteThread")
+	handle, _, ntStatus := createRemoteThread.Call(uintptr(hProcess), uintptr(lpThreadAttributes), uintptr(dwStackSize), uintptr(lpStartAddress), uintptr(lpParameter), uintptr(dwCreationFlags), uintptr(unsafe.Pointer(lpThreadId)))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return NULL, err
+	}
+	return HANDLE(handle), nil
+}
+
+/*
+FARPROC GetProcAddress(
+
+	[in] HMODULE hModule,
+	[in] LPCSTR  lpProcName
+
+);
+*/
+func GetProcAddress(hModule HANDLE, lpProcName string) (FARPROC, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	getProcAddress := kernel32.MustFindProc("GetProcAddress")
+	addr, _, ntStatus := getProcAddress.Call(uintptr(hModule), uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpProcName))))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return NULL, err
+	}
+	if addr == NULL {
+		return NULL, errors.New("Failed to get address of " + lpProcName)
+	}
+	return FARPROC(addr), nil
+}
+
+/*
+HMODULE GetModuleHandleA(
+
+	[in, optional] LPCSTR lpModuleName
+
+);
+*/
+func GetModuleHandleA(lpModuleName string) (HANDLE, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	getModuleHandleA := kernel32.MustFindProc("GetModuleHandleA")
+	handle, _, ntStatus := getModuleHandleA.Call(uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpModuleName))))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return NULL, err
+	}
+	if handle == NULL {
+		return NULL, errors.New("Failed to get handle of " + lpModuleName)
+	}
+	return HANDLE(handle), nil
+}
+
+func GetLoadLibraryWHandle() (HANDLE, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	loadLibraryW := kernel32.MustFindProc("LoadLibraryW")
+	handle := loadLibraryW.Addr()
+	if handle == NULL {
+		return NULL, errors.New("failed to get handle of LoadLibraryW")
+	}
+	return HANDLE(handle), nil
+}
+
+func (lpwstr *LPWSTR) String() string {
+	return syscall.UTF16ToString(*lpwstr)
+}
+
+func (lpwstr *LPWSTR) Bytes() []byte {
+	return []byte(lpwstr.String())
+}
+
+func (lpwstr *LPWSTR) Set(s string) error {
+	utf16, err := syscall.UTF16FromString(s)
+	if err != nil {
+		return err
+	}
+	*lpwstr = utf16
+	return nil
+}
+
+func (lpwstr *LPWSTR) Size() int {
+	return len(*lpwstr) * 2
+}
+
+func (lpwstr *LPWSTR) Pointer() (*uint16, error) {
+	return syscall.UTF16PtrFromString(lpwstr.String())
+}
+
+func GetProcessHandle(szProcessName string) (dwProcessId *DWORD, hProcess HANDLE, err error) {
+	hSnapShot, err := CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL)
+	if err != nil {
+		return nil, NULL, err
+	}
+	defer CloseHandle(hSnapShot)
+
+	// Retrieves information about the first process encountered in the snapshot.
+	var proc PROCESSENTRY32
+	proc.DwSize = DWORD(unsafe.Sizeof(proc))
+	if ok, err := Process32First(hSnapShot, &proc); !ok {
+		return nil, NULL, err
+	}
+
+	for {
+		if strings.EqualFold(CharSliceToString(proc.SzExeFile[:]), szProcessName) {
+			dwProcessId = &proc.Th32ProcessID
+			hProcess, err = OpenProcess(PROCESS_ALL_ACCESS, false, *dwProcessId)
+			if err != nil {
+				return nil, NULL, err
+			}
+			return dwProcessId, hProcess, nil
+		}
+
+		// Retrieves information about the next process recorded in a system snapshot.
+		if ok, err := Process32Next(hSnapShot, &proc); !ok {
+			if err == nil {
+				err = errors.New("process not found")
+			}
+			return nil, NULL, err
+		}
+	}
+}

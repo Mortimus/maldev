@@ -7,6 +7,8 @@ import (
 
 const NOP = 0x90
 
+var DEBUG = false
+
 func RandomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, n)
@@ -29,4 +31,17 @@ func ShellCodePadding(data []byte, multiple int) ([]byte, error) {
 		return nil, fmt.Errorf("failed to make data multiple of %d", multiple)
 	}
 	return data, nil
+}
+
+func Debugf(format string, args ...interface{}) {
+	if DEBUG {
+		fmt.Printf("[!] "+format, args...)
+	}
+}
+
+func DebugWait(reason string) {
+	if DEBUG {
+		fmt.Printf("[#] Press <Enter> To %s ... ", reason)
+		fmt.Scanln()
+	}
 }
