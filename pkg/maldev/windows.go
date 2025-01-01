@@ -21,6 +21,40 @@ const (
 )
 
 /*
+typedef struct tagPROCESSENTRY32 {
+  DWORD     dwSize;
+  DWORD     cntUsage;
+  DWORD     th32ProcessID;              // The process ID
+  ULONG_PTR th32DefaultHeapID;
+  DWORD     th32ModuleID;
+  DWORD     cntThreads;
+  DWORD     th32ParentProcessID;        // Process ID of the parent process
+  LONG      pcPriClassBase;
+  DWORD     dwFlags;
+  CHAR      szExeFile[MAX_PATH];        // The name of the executable file for the process
+} PROCESSENTRY32;
+*/
+
+type ULONG_PTR uintptr
+type CHAR byte
+type LONG int32
+
+const MAX_PATH = 260
+
+type PROCESSENTRY32 struct {
+	dwSize              DWORD
+	cntUsage            DWORD
+	th32ProcessID       DWORD
+	th32DefaultHeapID   ULONG_PTR
+	th32ModuleID        DWORD
+	cntThreads          DWORD
+	th32ParentProcessID DWORD
+	pcPriClassBase      LONG
+	dwFlags             DWORD
+	szExeFile           [MAX_PATH]CHAR
+}
+
+/*
 LPVOID VirtualAlloc(
 
 	[in, optional] LPVOID lpAddress,          // The starting address of the region to allocate (set to NULL)
@@ -104,3 +138,32 @@ func VirtualFree(lpAddress LPVOID, dwSize SIZE_T, dwFreeType DWORD) (bool, error
 	}
 	return result != 0, nil
 }
+
+/*
+HANDLE CreateToolhelp32Snapshot(
+
+	[in] DWORD dwFlags,
+	[in] DWORD th32ProcessID
+
+);
+*/
+func CreateToolhelp32Snapshot(dwFlags DWORD, th32ProcessID DWORD) (HANDLE, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	createToolhelp32Snapshot := kernel32.MustFindProc("CreateToolhelp32Snapshot")
+	handle, _, ntStatus := createToolhelp32Snapshot.Call(uintptr(dwFlags), uintptr(th32ProcessID))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return 1, err
+	}
+	return HANDLE(handle), nil
+}
+
+const (
+	TH32CS_INHERIT      = 0x80000000                                        // Indicates that the snapshot handle is to be inheritable.
+	TH32CS_SNAPALL      = 0x00000001 | 0x00000008 | 0x00000002 | 0x00000004 // 	Includes all processes and threads in the system, plus the heaps and modules of the process specified in th32ProcessID. Equivalent to specifying the TH32CS_SNAPHEAPLIST, TH32CS_SNAPMODULE, TH32CS_SNAPPROCESS, and TH32CS_SNAPTHREAD values combined using an OR operation ('|').
+	TH32CS_SNAPHEAPLIST = 0x00000001                                        // Includes all heaps of the process specified in th32ProcessID in the snapshot. To enumerate the heaps, see Heap32ListFirst.
+	TH32CS_SNAPMODULE   = 0x00000008                                        // Includes all modules of the process specified in th32ProcessID in the snapshot. To enumerate the modules, see Module32First. If the function fails with ERROR_BAD_LENGTH, retry the function until it succeeds. 64-bit Windows:  Using this flag in a 32-bit process includes the 32-bit modules of the process specified in th32ProcessID, while using it in a 64-bit process includes the 64-bit modules. To include the 32-bit modules of the process specified in th32ProcessID from a 64-bit process, use the TH32CS_SNAPMODULE32 flag.
+	TH32CS_SNAPMODULE32 = 0x00000010                                        // Includes all 32-bit modules of the process specified in th32ProcessID in the snapshot when called from a 64-bit process. This flag can be combined with TH32CS_SNAPMODULE or TH32CS_SNAPALL. If the function fails with ERROR_BAD_LENGTH, retry the function until it succeeds.
+	TH32CS_SNAPPROCESS  = 0x00000002                                        // Includes all processes in the system in the snapshot. To enumerate the processes, see Process32First.
+	TH32CS_SNAPTHREAD   = 0x00000004                                        // Includes all threads in the system in the snapshot. To enumerate the threads, see Thread32First. To identify the threads that belong to a specific process, compare its process identifier to the th32OwnerProcessID member of the THREADENTRY32 structure when enumerating the threads.
+)
