@@ -112,15 +112,43 @@ BOOL VirtualProtect(
 
 );
 */
-func VirtualProtect(lpAddress LPVOID, dwSize SIZE_T, flNewProtect DWORD, lpflOldProtect *DWORD) (bool, error) {
+func VirtualProtect(lpAddress LPVOID, dwSize SIZE_T, flNewProtect DWORD, lpflOldProtect *DWORD) error {
 	kernel32 := syscall.MustLoadDLL("kernel32.dll")
 	virtualProtect := kernel32.MustFindProc("VirtualProtect")
 	result, _, ntStatus := virtualProtect.Call(uintptr(lpAddress), uintptr(dwSize), uintptr(flNewProtect), uintptr(unsafe.Pointer(lpflOldProtect)))
 	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
 	if err != nil {
-		return false, err
+		return err
 	}
-	return result != 0, nil
+	if result == 0 {
+		return errors.New("virtualProtect had non-zero result")
+	}
+	return nil
+}
+
+/*
+BOOL VirtualProtectEx(
+
+	[in]  HANDLE hProcess,
+	[in]  LPVOID lpAddress,
+	[in]  SIZE_T dwSize,
+	[in]  DWORD  flNewProtect,
+	[out] PDWORD lpflOldProtect
+
+);
+*/
+func VirtualProtectEx(hProcess HANDLE, lpAddress LPVOID, dwSize SIZE_T, flNewProtect DWORD, lpflOldProtect *DWORD) error {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	virtualProtectEx := kernel32.MustFindProc("VirtualProtectEx")
+	result, _, ntStatus := virtualProtectEx.Call(uintptr(hProcess), uintptr(lpAddress), uintptr(dwSize), uintptr(flNewProtect), uintptr(unsafe.Pointer(lpflOldProtect)))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return err
+	}
+	if result == 0 {
+		return errors.New("virtualProtectEx had zero result")
+	}
+	return nil
 }
 
 /*
@@ -155,15 +183,18 @@ BOOL VirtualFree(
 
 );
 */
-func VirtualFree(lpAddress LPVOID, dwSize SIZE_T, dwFreeType DWORD) (bool, error) {
+func VirtualFree(lpAddress LPVOID, dwSize SIZE_T, dwFreeType DWORD) error {
 	kernel32 := syscall.MustLoadDLL("kernel32.dll")
 	virtualFree := kernel32.MustFindProc("VirtualFree")
 	result, _, ntStatus := virtualFree.Call(uintptr(lpAddress), uintptr(dwSize), uintptr(dwFreeType))
 	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
 	if err != nil {
-		return false, err
+		return err
 	}
-	return result != 0, nil
+	if result == 0 {
+		return errors.New("virtualFree had zero result")
+	}
+	return nil
 }
 
 /*
@@ -203,15 +234,18 @@ BOOL Process32First(
 
 );
 */
-func Process32First(hSnapshot HANDLE, lppe *PROCESSENTRY32) (bool, error) {
+func Process32First(hSnapshot HANDLE, lppe *PROCESSENTRY32) error {
 	kernel32 := syscall.MustLoadDLL("kernel32.dll")
 	process32First := kernel32.MustFindProc("Process32First")
 	result, _, ntStatus := process32First.Call(uintptr(hSnapshot), uintptr(unsafe.Pointer(lppe)))
 	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
 	if err != nil {
-		return false, err
+		return err
 	}
-	return result != 0, nil
+	if result == 0 {
+		return errors.New("process32First had zero result")
+	}
+	return nil
 }
 
 /*
@@ -222,15 +256,18 @@ BOOL Process32Next(
 
 );
 */
-func Process32Next(hSnapshot HANDLE, lppe *PROCESSENTRY32) (bool, error) {
+func Process32Next(hSnapshot HANDLE, lppe *PROCESSENTRY32) error {
 	kernel32 := syscall.MustLoadDLL("kernel32.dll")
 	process32Next := kernel32.MustFindProc("Process32Next")
 	result, _, ntStatus := process32Next.Call(uintptr(hSnapshot), uintptr(unsafe.Pointer(lppe)))
 	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
 	if err != nil {
-		return false, err
+		return err
 	}
-	return result != 0, nil
+	if result == 0 {
+		return errors.New("process not found")
+	}
+	return nil
 }
 
 /*
@@ -323,12 +360,21 @@ BOOL WriteProcessMemory(
 );
 */
 func WriteProcessMemory(hProcess HANDLE, lpBaseAddress LPVOID, lpBuffer LPCVOID, nSize SIZE_T, lpNumberOfBytesWritten *SIZE_T) error {
+	if lpNumberOfBytesWritten == nil {
+		return errors.New("lpNumberOfBytesWritten cannot be nil")
+	}
 	kernel32 := syscall.MustLoadDLL("kernel32.dll")
 	writeProcessMemory := kernel32.MustFindProc("WriteProcessMemory")
 	_, _, ntStatus := writeProcessMemory.Call(uintptr(hProcess), uintptr(lpBaseAddress), uintptr(lpBuffer), uintptr(nSize), uintptr(unsafe.Pointer(lpNumberOfBytesWritten)))
 	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
 	if err != nil {
 		return err
+	}
+	if lpNumberOfBytesWritten == nil {
+		return errors.New("failed to write bytes to process")
+	}
+	if lpNumberOfBytesWritten.Value() != nSize.Value() {
+		return errors.New("failed to write all bytes")
 	}
 	return nil
 }
@@ -445,7 +491,7 @@ func GetProcessHandle(szProcessName string) (dwProcessId *DWORD, hProcess HANDLE
 	// Retrieves information about the first process encountered in the snapshot.
 	var proc PROCESSENTRY32
 	proc.DwSize = DWORD(unsafe.Sizeof(proc))
-	if ok, err := Process32First(hSnapShot, &proc); !ok {
+	if err := Process32First(hSnapShot, &proc); err != nil {
 		return nil, NULL, err
 	}
 
@@ -460,11 +506,36 @@ func GetProcessHandle(szProcessName string) (dwProcessId *DWORD, hProcess HANDLE
 		}
 
 		// Retrieves information about the next process recorded in a system snapshot.
-		if ok, err := Process32Next(hSnapShot, &proc); !ok {
-			if err == nil {
-				err = errors.New("process not found")
-			}
+		if err := Process32Next(hSnapShot, &proc); err != nil {
 			return nil, NULL, err
 		}
 	}
+}
+
+func (st SIZE_T) Value() int {
+	return int(st)
+}
+
+/*
+BOOL VirtualFreeEx(
+
+	[in] HANDLE hProcess,
+	[in] LPVOID lpAddress,
+	[in] SIZE_T dwSize,
+	[in] DWORD  dwFreeType
+
+);
+*/
+func VirtualFreeEx(hProcess HANDLE, lpAddress LPVOID, dwSize SIZE_T, dwFreeType DWORD) error {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	virtualFreeEx := kernel32.MustFindProc("VirtualFreeEx")
+	result, _, ntStatus := virtualFreeEx.Call(uintptr(hProcess), uintptr(lpAddress), uintptr(dwSize), uintptr(dwFreeType))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return err
+	}
+	if result == 0 {
+		return errors.New("virtualFreeEx had zero result")
+	}
+	return nil
 }

