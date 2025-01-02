@@ -690,7 +690,12 @@ func GetRemoteProcessHandle(targetProcess string) (HANDLE, error) {
 	}
 	for _, p := range processes {
 		if strings.EqualFold(p.Name, targetProcess) {
-			return p.Handle, nil
+			if p.Handle == NULL { // Can this even be reached?
+				Debugf("Failed to get handle for process %s\n", targetProcess)
+				continue
+			} else {
+				return p.Handle, nil
+			}
 		}
 	}
 	return NULL, errors.New("Failed to find process " + targetProcess)
