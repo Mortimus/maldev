@@ -11,6 +11,7 @@ type LPVOID uintptr
 type DWORD uint32
 type SIZE_T uintptr
 type HANDLE uintptr
+type HMODULE uintptr
 type LPSECURITY_ATTRIBUTES uintptr
 type LPTHREAD_START_ROUTINE uintptr
 type FARPROC uintptr
@@ -425,6 +426,7 @@ func GetProcAddress(hModule HANDLE, lpProcName string) (FARPROC, error) {
 	return FARPROC(addr), nil
 }
 
+// DEPRECATED: No longer using
 /*
 HMODULE GetModuleHandleA(
 
@@ -432,19 +434,19 @@ HMODULE GetModuleHandleA(
 
 );
 */
-func GetModuleHandleA(lpModuleName string) (HANDLE, error) {
-	kernel32 := syscall.MustLoadDLL("kernel32.dll")
-	getModuleHandleA := kernel32.MustFindProc("GetModuleHandleA")
-	handle, _, ntStatus := getModuleHandleA.Call(uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpModuleName))))
-	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
-	if err != nil {
-		return NULL, err
-	}
-	if handle == NULL {
-		return NULL, errors.New("Failed to get handle of " + lpModuleName)
-	}
-	return HANDLE(handle), nil
-}
+// func GetModuleHandleA(lpModuleName string) (HANDLE, error) {
+// 	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+// 	getModuleHandleA := kernel32.MustFindProc("GetModuleHandleA")
+// 	handle, _, ntStatus := getModuleHandleA.Call(uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpModuleName))))
+// 	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+// 	if err != nil {
+// 		return NULL, err
+// 	}
+// 	if handle == NULL {
+// 		return NULL, errors.New("Failed to get handle of " + lpModuleName)
+// 	}
+// 	return HANDLE(handle), nil
+// }
 
 func GetLoadLibraryWHandle() (HANDLE, error) {
 	kernel32 := syscall.MustLoadDLL("kernel32.dll")
@@ -538,4 +540,158 @@ func VirtualFreeEx(hProcess HANDLE, lpAddress LPVOID, dwSize SIZE_T, dwFreeType 
 		return errors.New("virtualFreeEx had zero result")
 	}
 	return nil
+}
+
+const MAXPROCESSES = 1024 * 2
+
+/*
+BOOL EnumProcesses(
+
+	[out] DWORD   *lpidProcess, // A pointer to an array that receives the list of process identifiers.
+	[in]  DWORD   cb,           // The size of the pProcessIds array, in bytes.
+	[out] LPDWORD lpcbNeeded    // The number of bytes returned in the pProcessIds array.
+
+);
+*/
+func EnumProcesses() ([]DWORD, error) {
+	psapi := syscall.MustLoadDLL("psapi.dll")
+	enumProcesses := psapi.MustFindProc("EnumProcesses")
+
+	cb := unsafe.Sizeof(DWORD(0)) * MAXPROCESSES
+	var lpidProcess [MAXPROCESSES]DWORD
+	var lpcbNeeded DWORD
+	result, _, ntStatus := enumProcesses.Call(uintptr(unsafe.Pointer(&lpidProcess[0])), uintptr(cb), uintptr(unsafe.Pointer(&lpcbNeeded)))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return nil, err
+	}
+
+	// fmt.Printf("lpidProcess: %+v\n", &lpidProcess[:lpcbNeeded])
+	if result == 0 {
+		return nil, errors.New("enumProcesses had zero result")
+	}
+	pidCount := (lpcbNeeded / DWORD(unsafe.Sizeof(DWORD(0))))
+	return lpidProcess[1:pidCount], nil
+}
+
+/*
+BOOL EnumProcessModules(
+
+	[in]  HANDLE  hProcess,   // A handle to the process.
+	[out] HMODULE *lphModule, // An array that receives the list of module handles.
+	[in]  DWORD   cb,         // The size of the lphModule array, in bytes.
+	[out] LPDWORD lpcbNeeded  // The number of bytes required to store all module handles in the lphModule array.
+
+);
+*/
+func EnumProcessModules(hProcess HANDLE) ([]HMODULE, error) {
+	psapi := syscall.MustLoadDLL("psapi.dll")
+	enumProcessModules := psapi.MustFindProc("EnumProcessModules")
+	const MAXMODULES = 2048
+	var lphModule [MAXMODULES]HMODULE
+	cb := unsafe.Sizeof(lphModule)
+	var lpcbNeeded DWORD
+	result, _, ntStatus := enumProcessModules.Call(uintptr(hProcess), uintptr(unsafe.Pointer(&lphModule[0])), uintptr(cb), uintptr(unsafe.Pointer(&lpcbNeeded)))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return nil, err
+	}
+	if result == 0 {
+		return nil, errors.New("enumProcessModules had zero result")
+	}
+	count := lpcbNeeded / DWORD(unsafe.Sizeof(HMODULE(0)))
+	return lphModule[:count], nil
+}
+
+func EnumProcessModule(hProcess HANDLE) (HMODULE, error) {
+	modules, err := EnumProcessModules(hProcess)
+	if err != nil {
+		return NULL, err
+	}
+	return modules[0], err
+}
+
+/*
+DWORD GetModuleBaseNameA(
+
+	[in]           HANDLE  hProcess,   // A handle to the process that contains the module.
+	[in, optional] HMODULE hModule,    // A handle to the module. If this parameter is NULL, this function returns the name of the file used to create the calling process.
+	[out]          LPSTR   lpBaseName, // A pointer to a buffer that receives the base name of the module. If the base name is longer than MAX_PATH, the function succeeds but the base name is truncated and null-terminated.
+	[in]           DWORD   nSize       // The size of the lpBaseName buffer, in characters.
+
+);
+*/
+func GetModuleBaseNameA(hProcess HANDLE, hModule HMODULE) (string, error) {
+	psapi := syscall.MustLoadDLL("psapi.dll")
+	getModuleBaseNameA := psapi.MustFindProc("GetModuleBaseNameA")
+	var lpBaseName [MAX_PATH]CHAR
+	nSize := DWORD(unsafe.Sizeof(lpBaseName))
+	result, _, ntStatus := getModuleBaseNameA.Call(uintptr(hProcess), uintptr(hModule), uintptr(unsafe.Pointer(&lpBaseName[0])), uintptr(nSize))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return "", err
+	}
+	if result == 0 {
+		return "", errors.New("getModuleBaseNameA had zero result")
+	}
+	return CharSliceToString(lpBaseName[:]), nil
+	// return "", nil
+}
+
+type Process struct {
+	ID     DWORD
+	Name   string
+	Handle HANDLE
+}
+
+func GetProcesses(withHandle bool) ([]Process, error) {
+	processes, err := EnumProcesses()
+	if err != nil {
+		return nil, errors.New("Failed to enumerate processes " + err.Error())
+	}
+	var procs []Process
+	for _, p := range processes {
+		Debugf("PID: %d\n", p)
+		// Only read the process name if we can open the process
+		// pHandle, err := OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ, false, p)
+		// Get a handle to the process
+		var perms DWORD
+		if withHandle {
+			perms = PROCESS_ALL_ACCESS
+		} else {
+			perms = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+		}
+		pHandle, err := OpenProcess(perms, false, p)
+		if err != nil {
+			Debugf("Failed to open process %d: %s\n", p, err)
+			continue
+		}
+		if !withHandle {
+			defer CloseHandle(pHandle)
+		}
+		mod, err := EnumProcessModule(pHandle)
+		if err != nil {
+			Debugf("Failed to enumerate modules for process %d: %s\n", p, err)
+		} else {
+			baseName, err := GetModuleBaseNameA(pHandle, mod)
+			if err != nil {
+				Debugf("Failed to get module base name for process %d: %s\n", p, err)
+			}
+			procs = append(procs, Process{ID: p, Name: baseName, Handle: pHandle})
+		}
+	}
+	return procs, nil
+}
+
+func GetRemoteProcessHandle(targetProcess string) (HANDLE, error) {
+	processes, err := GetProcesses(true)
+	if err != nil {
+		return NULL, errors.New("Failed to get processes: " + err.Error())
+	}
+	for _, p := range processes {
+		if strings.EqualFold(p.Name, targetProcess) {
+			return p.Handle, nil
+		}
+	}
+	return NULL, errors.New("Failed to find process " + targetProcess)
 }

@@ -11,6 +11,7 @@ import (
 )
 
 func main() {
+	maldev.DEBUG = true
 	regKey := flag.String("key", `Control Panel`, "Registry Key")
 	regName := flag.String("name", "Shellcode", "Name of the registry value to store shellcode")
 	write := flag.Bool("write", false, "Write shellcode to registry")

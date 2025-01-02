@@ -26,3 +26,15 @@ go.work.sum
 
 # DLL header files
 *.h
+
+# Certificate files
+*.pem
+*.key
+*.pfx
+
+# Keep third_party tools
+!third_party/libcrypto-3-x64.dll
+!third_party/libssl-3-x64.dll
+!third_party/limelighter.exe
+!third_party/osslsigncode.exe
+!third_party/zlib1.dll

