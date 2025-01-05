@@ -17,7 +17,7 @@ func main() {
 		fmt.Printf("PID: %d\tName: %s\n", process.ID, process.Name)
 	}
 
-	pHandle, err := maldev.GetRemoteProcessHandle("notepad.exe")
+	pHandle, err := maldev.GetRemoteProcessHandleCreateToolhelp32Snapshot("notepad.exe")
 	if err != nil {
 		log.Fatalf("Error getting process handle: %v", err)
 	}

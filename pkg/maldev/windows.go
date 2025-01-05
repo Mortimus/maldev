@@ -2,12 +2,15 @@ package maldev
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"syscall"
 	"unsafe"
 )
 
 type LPVOID uintptr
+type PVOID uintptr
+type ULONG uint32
 type DWORD uint32
 type SIZE_T uintptr
 type HANDLE uintptr
@@ -16,6 +19,17 @@ type LPSECURITY_ATTRIBUTES uintptr
 type LPTHREAD_START_ROUTINE uintptr
 type FARPROC uintptr
 type LPWSTR []uint16
+type USHORT uint16
+type UNICODE_STRING struct {
+	Length        uint16  // USHORT
+	MaximumLength uint16  // USHORT
+	Buffer        *uint16 // PWSTR
+}
+type KPRIORITY int32
+type LARGE_INTEGER struct {
+	LowPart  DWORD
+	HighPart LONG
+}
 
 const (
 	MEM_COMMIT             = 0x1000
@@ -24,6 +38,8 @@ const (
 	PAGE_READWRITE         = 0x04
 	MEM_RELEASE            = 0x8000
 )
+
+const STATUS_INFO_LENGTH_MISMATCH = 0xC0000004
 
 /*
 typedef struct tagPROCESSENTRY32 {
@@ -683,7 +699,7 @@ func GetProcesses(withHandle bool) ([]Process, error) {
 	return procs, nil
 }
 
-func GetRemoteProcessHandle(targetProcess string) (HANDLE, error) {
+func GetRemoteProcessHandleCreateToolhelp32Snapshot(targetProcess string) (HANDLE, error) {
 	processes, err := GetProcesses(true)
 	if err != nil {
 		return NULL, errors.New("Failed to get processes: " + err.Error())
@@ -699,4 +715,187 @@ func GetRemoteProcessHandle(targetProcess string) (HANDLE, error) {
 		}
 	}
 	return NULL, errors.New("Failed to find process " + targetProcess)
+}
+
+/*
+typedef enum _SYSTEM_INFORMATION_CLASS {
+
+	SystemBasicInformation,
+	SystemProcessorInformation,
+	SystemPerformanceInformation,
+	SystemTimeOfDayInformation,
+	SystemPathInformation,
+	SystemProcessInformation,
+	SystemCallCountInformation,
+	SystemDeviceInformation,
+	SystemProcessorPerformanceInformation,
+	SystemFlagsInformation,
+	SystemCallTimeInformation,
+	SystemModuleInformation,
+	SystemLocksInformation,
+	SystemStackTraceInformation,
+	SystemPagedPoolInformation,
+	SystemNonPagedPoolInformation,
+	SystemHandleInformation,
+	SystemObjectInformation,
+	SystemPageFileInformation,
+	SystemVdmInstemulInformation,
+	SystemVdmBopInformation,
+	SystemFileCacheInformation,
+	SystemPoolTagInformation,
+	SystemInterruptInformation,
+	SystemDpcBehaviorInformation,
+	SystemFullMemoryInformation,
+	SystemLoadGdiDriverInformation,
+	SystemUnloadGdiDriverInformation,
+	SystemTimeAdjustmentInformation,
+	SystemSummaryMemoryInformation,
+	SystemNextEventIdInformation,
+	SystemEventIdsInformation,
+	SystemCrashDumpInformation,
+	SystemExceptionInformation,
+	SystemCrashDumpStateInformation,
+	SystemKernelDebuggerInformation,
+	SystemContextSwitchInformation,
+	SystemRegistryQuotaInformation,
+	SystemExtendServiceTableInformation,
+	SystemPrioritySeperation,
+	SystemPlugPlayBusInformation,
+	SystemDockInformation,
+	SystemPowerInformation,
+	SystemProcessorSpeedInformation,
+	SystemCurrentTimeZoneInformation,
+	SystemLookasideInformation
+
+} SYSTEM_INFORMATION_CLASS, *PSYSTEM_INFORMATION_CLASS;
+*/
+type SYSTEM_INFORMATION_CLASS int32
+
+const (
+	SystemBasicInformation SYSTEM_INFORMATION_CLASS = iota
+	SystemProcessorInformation
+	SystemPerformanceInformation
+	SystemTimeOfDayInformation
+	SystemPathInformation
+	SystemProcessInformation
+	SystemCallCountInformation
+	SystemDeviceInformation
+	SystemProcessorPerformanceInformation
+	SystemFlagsInformation
+	SystemCallTimeInformation
+	SystemModuleInformationn
+	SystemLocksInformation
+	SystemStackTraceInformation
+	SystemPagedPoolInformation
+	SystemNonPagedPoolInformation
+	SystemHandleInformation
+	SystemObjectInformation
+	SystemPageFileInformation
+	SystemVdmInstemulInformation
+	SystemVdmBopInformation
+	SystemFileCacheInformation
+	SystemPoolTagInformation
+	SystemInterruptInformation
+	SystemDpcBehaviorInformation
+	SystemFullMemoryInformation
+	SystemLoadGdiDriverInformation
+	SystemUnloadGdiDriverInformation
+	SystemTimeAdjustmentInformation
+	SystemSummaryMemoryInformation
+	SystemNextEventIdInformation
+	SystemEventIdsInformation
+	SystemCrashDumpInformation
+	SystemExceptionInformation
+	SystemCrashDumpStateInformation
+	SystemKernelDebuggerInformation
+	SystemContextSwitchInformation
+	SystemRegistryQuotaInformation
+	SystemExtendServiceTableInformation
+	SystemPrioritySeperation
+	SystemPlugPlayBusInformation
+	SystemDockInformation
+	SystemPowerInformation
+	SystemProcessorSpeedInformation
+	SystemCurrentTimeZoneInformation
+	SystemLookasideInformation
+)
+
+// type SYSTEM_PROCESS_INFORMATION struct {
+// 	NextEntryOffset       uint32
+// 	NumberOfThreads       uint32
+// 	WorkingSetPrivateSize uint64
+// 	Reserved1             [48]byte
+// 	ImageName             UNICODE_STRING
+// 	UniqueProcessId       uintptr
+// 	Reserved2             [24]byte
+// }
+
+type SYSTEM_PROCESS_INFORMATION struct {
+	NextEntryOffset uint32
+	NumberOfThreads uint32
+	Reserved1       [48]byte
+	ImageName       UNICODE_STRING
+	BasePriority    KPRIORITY
+	UniqueProcessId uintptr
+	Reserved2       [20]byte
+}
+
+func GetRemoteProcessHandleNtQuerySystemInformation(procName string) (DWORD, HANDLE, error) {
+	ntdll := syscall.MustLoadDLL("ntdll.dll")
+	procNtQuerySystemInformation := ntdll.MustFindProc("NtQuerySystemInformation")
+
+	var returnLen uint32
+
+	// Initial buffer sizing
+	status, _, _ := procNtQuerySystemInformation.Call(
+		uintptr(SystemProcessInformation),
+		0,
+		0,
+		uintptr(unsafe.Pointer(&returnLen)),
+	)
+
+	if status != STATUS_INFO_LENGTH_MISMATCH {
+		return 0, 0, fmt.Errorf("NtQuerySystemInformation failed with status: 0x%X", status)
+	}
+
+	// Allocate buffer
+	buffer := make([]byte, returnLen)
+
+	// Retrieve process information
+	status, _, _ = procNtQuerySystemInformation.Call(
+		uintptr(SystemProcessInformation),
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(len(buffer)),
+		uintptr(unsafe.Pointer(&returnLen)),
+	)
+	if status != 0 {
+		return 0, 0, fmt.Errorf("NtQuerySystemInformation failed with status: 0x%X", status)
+	}
+
+	// Iterate through the process list
+	systemProcInfo := (*SYSTEM_PROCESS_INFORMATION)(unsafe.Pointer(&buffer[0]))
+	for {
+		if systemProcInfo.ImageName.Length > 0 {
+			name := syscall.UTF16ToString((*[4096]uint16)(unsafe.Pointer(systemProcInfo.ImageName.Buffer))[:systemProcInfo.ImageName.Length/2])
+			if strings.EqualFold(name, procName) {
+				pid := DWORD(systemProcInfo.UniqueProcessId)
+				// fmt.Printf("Found process %s with PID %d\n", name, pid)
+				hProcess, err := OpenProcess(PROCESS_ALL_ACCESS, false, pid)
+				if err != nil {
+					return 0, 0, fmt.Errorf("OpenProcess failed: %v", err)
+				}
+				return pid, hProcess, nil
+			}
+		}
+
+		if systemProcInfo.NextEntryOffset == 0 {
+			break
+		}
+
+		// Move to the next entry
+		addr := uintptr(unsafe.Pointer(systemProcInfo)) + uintptr(systemProcInfo.NextEntryOffset)
+		systemProcInfo = (*SYSTEM_PROCESS_INFORMATION)(unsafe.Pointer(addr))
+	}
+
+	return 0, 0, fmt.Errorf("Process not found")
 }
